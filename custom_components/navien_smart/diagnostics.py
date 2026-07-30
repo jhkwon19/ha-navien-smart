@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PASSWORD
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
@@ -30,6 +30,7 @@ async def async_get_config_entry_diagnostics(
             **entry.as_dict(),
             "data": {
                 **entry.data,
+                CONF_USERNAME: "**REDACTED**",
                 CONF_PASSWORD: "**REDACTED**",
             },
         },
