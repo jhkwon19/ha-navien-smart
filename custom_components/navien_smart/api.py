@@ -133,18 +133,37 @@ MQTT_STATUS_TIMEOUT = 5
 TARGET_HUMIDITY_STEP = 5
 OPTIMISTIC_STATE_TTL = 120
 SUPPORTED_SERVICE_CODE = "300"
-SUPPORTED_MODEL_CODES = {"1901"}
-SUPPORTED_MODEL_NAMES = {"1901": "NRT-530Z3"}
+SUPPORTED_MODEL_CODES = {"1900", "1901"}
+SUPPORTED_MODEL_NAMES = {
+    "1900": "NRT-530S3",
+    "1901": "NRT-530Z3",
+}
+SUPPORTED_MODEL_NAME_PATTERNS = (
+    re.compile(r"\bNRT[- ]?530", re.IGNORECASE),
+    re.compile(r"\bNRZ[- ]?530", re.IGNORECASE),
+)
 NRT530_AIR_MONITOR_MODEL_NAMES = {
+    "34": "NAA-30DM",
     "35": "NAA-21DM",
 }
 AIR_SENSOR_KEY_ALIASES = {
+    "airquality": "total",
+    "airqualityscore": "total",
+    "air_quality": "total",
+    "air_quality_score": "total",
     "radonvalue": "radon",
     "radon_value": "radon",
     "radonbq": "radon",
     "radonbqm3": "radon",
+    "radonstagevalue": "radon",
+    "radon_stage_value": "radon",
+    "radonconcentration": "radon",
+    "radon_concentration": "radon",
+    "voc": "tvoc",
+    "t_voc": "tvoc",
 }
 RADON_SENSOR_KEYS = {"radon"}
+NRT530_DEFAULT_CONFIGURABLE_AIR_VOLUMES = (4, 1, 2, 3)
 
 
 class NavienSmartApiClient:
@@ -178,6 +197,7 @@ class NavienSmartApiClient:
         self._latest_status_by_device_id: dict[str, dict[str, Any]] = {}
         self._latest_air_sensors_by_device_id: dict[str, dict[str, dict[str, Any]]] = {}
         self._devices: dict[str, NavienDevice] = {}
+        self._all_raw_devices: list[dict[str, Any]] = []
         self._raw_devices: list[dict[str, Any]] = []
         self._logged_unsupported_devices: set[tuple[str, str, str]] = set()
         self._optimistic_state: dict[str, dict[str, Any]] = {}
@@ -317,6 +337,8 @@ class NavienSmartApiClient:
             params={"homeSeq": self._home_seq, "userSeq": self._user_seq},
         )
         devices = data.get("data", {}).get("devices", [])
+        devices = devices if isinstance(devices, list) else []
+        self._all_raw_devices = devices
         supported_devices = self._supported_devices(devices)
         self._raw_devices = supported_devices
         await self._async_refresh_mqtt_status(supported_devices)
@@ -366,6 +388,19 @@ class NavienSmartApiClient:
             )
         return {
             "mqtt_connected": self._mqtt_connected,
+            "all_devices": [
+                {
+                    "deviceSeq": "**REDACTED**",
+                    "deviceId": "**REDACTED**",
+                    "serviceCode": raw_device.get("serviceCode"),
+                    "modelCode": raw_device.get("modelCode"),
+                    "modelName": raw_device.get("modelName"),
+                    "connected": raw_device.get("connected"),
+                    "supported_by_integration": self._is_supported_airone_device(raw_device),
+                }
+                for raw_device in self._all_raw_devices
+                if isinstance(raw_device, dict)
+            ],
             "raw_devices": raw_devices,
             "latest_status": [
                 self._diagnostic_status(status)
@@ -468,13 +503,31 @@ class NavienSmartApiClient:
         """Return devices this integration intentionally supports."""
         supported: list[dict[str, Any]] = []
         for raw_device in raw_devices:
-            service_code = str(raw_device.get("serviceCode") or "")
-            model_code = str(raw_device.get("modelCode") or "")
-            if service_code == SUPPORTED_SERVICE_CODE and model_code in SUPPORTED_MODEL_CODES:
+            if self._is_supported_airone_device(raw_device):
                 supported.append(raw_device)
                 continue
             self._log_unsupported_device(raw_device)
         return supported
+
+    @classmethod
+    def _is_supported_airone_device(cls, raw_device: dict[str, Any]) -> bool:
+        """Return whether a raw device looks like a supported NRT530-series AirOne."""
+        service_code = str(raw_device.get("serviceCode") or "")
+        if service_code != SUPPORTED_SERVICE_CODE:
+            return False
+        model_code = str(raw_device.get("modelCode") or "")
+        if model_code in SUPPORTED_MODEL_CODES:
+            return True
+        model_text = " ".join(
+            str(value)
+            for value in (
+                raw_device.get("modelName"),
+                raw_device.get("modelDisplayName"),
+                raw_device.get("name"),
+            )
+            if value not in (None, "")
+        )
+        return any(pattern.search(model_text) for pattern in SUPPORTED_MODEL_NAME_PATTERNS)
 
     def _log_unsupported_device(self, raw_device: dict[str, Any]) -> None:
         """Log unsupported devices once so new model support can be added later."""
@@ -774,16 +827,15 @@ class NavienSmartApiClient:
             status = self._find_status_room_controller(raw_device)
         state: dict[str, Any] = {}
 
-        running = status.get("running")
-        if running is None:
-            running = room_controller.get("running")
-        if running is None:
-            running = room_controller.get("state")
-        if running is not None:
-            try:
-                state["power"] = int(running) == 1
-            except (TypeError, ValueError):
-                pass
+        running = self._first_present_value(
+            status,
+            room_controller,
+            self._reported_room_controller(raw_device),
+            keys=("running", "state", "power"),
+        )
+        power = self._power_from_running_value(running)
+        if power is not None:
+            state["power"] = power
 
         mode_code = self._int_value(status.get("mode"))
         mode_option = self._int_value(status.get("option"), default=1)
@@ -853,8 +905,8 @@ class NavienSmartApiClient:
             )
         return summary
 
-    @staticmethod
-    def _find_status_room_controller(raw_device: dict[str, Any]) -> dict[str, Any]:
+    @classmethod
+    def _find_status_room_controller(cls, raw_device: dict[str, Any]) -> dict[str, Any]:
         """Find a roomController object that looks like live status."""
         properties = raw_device.get("Properties") or {}
         candidates = [
@@ -872,9 +924,47 @@ class NavienSmartApiClient:
             if not isinstance(candidate, dict):
                 continue
             mode_value = candidate.get("mode")
-            if mode_value is None or self._int_value(mode_value) is not None:
+            if mode_value is None or cls._int_value(mode_value) is not None:
                 return candidate
         return {}
+
+    @staticmethod
+    def _reported_room_controller(raw_device: dict[str, Any]) -> dict[str, Any]:
+        """Return DID reported roomController, including capability-shaped payloads."""
+        properties = raw_device.get("Properties") or {}
+        room_controller = (
+            ((properties.get("data") or {}).get("did") or {})
+            .get("reported", {})
+            .get("roomController")
+        )
+        return room_controller if isinstance(room_controller, dict) else {}
+
+    @staticmethod
+    def _first_present_value(*items: dict[str, Any], keys: tuple[str, ...]) -> Any:
+        """Return the first present value for any key across dictionaries."""
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for key in keys:
+                if key in item and item.get(key) not in (None, ""):
+                    return item.get(key)
+        return None
+
+    @classmethod
+    def _power_from_running_value(cls, value: Any) -> bool | None:
+        """Map Navien running/state values to Home Assistant switch state."""
+        int_value = cls._int_value(value)
+        if int_value is not None:
+            if int_value == 1:
+                return True
+            if int_value in (0, 2):
+                return False
+        text = str(value).strip().lower()
+        if text in {"on", "true", "run", "running", "1", "y", "yes"}:
+            return True
+        if text in {"off", "false", "stop", "stopped", "0", "2", "n", "no"}:
+            return False
+        return None
 
     @staticmethod
     def _mode_from_current_values(
@@ -1092,7 +1182,14 @@ class NavienSmartApiClient:
         configurable = bool(mode_item.get("configurable"))
         supported = mode_item.get("supportedAirVolumes") or []
         if configurable and isinstance(supported, list):
-            for air_volume in supported:
+            supported_volumes = [
+                int(air_volume)
+                for air_volume in supported
+                if self._int_value(air_volume) in FAN_BY_AIR_VOLUME
+            ]
+            if len(supported_volumes) < 2 and int(mode_item.get("option") or 1) == 1:
+                supported_volumes = list(NRT530_DEFAULT_CONFIGURABLE_AIR_VOLUMES)
+            for air_volume in supported_volumes:
                 if int(air_volume) in FAN_BY_AIR_VOLUME:
                     key, name = FAN_BY_AIR_VOLUME[int(air_volume)]
                     options.append(
@@ -1615,7 +1712,7 @@ class NavienSmartApiClient:
         sensor_type = cls._normalize_air_sensor_key(value.get("type"))
         if sensor_type is not None and "value" in value:
             values[str(sensor_type)] = {
-                "value": value.get("value"),
+                "value": cls._normalize_air_sensor_value(value.get("value")),
                 "level": value.get("level"),
                 "zone_id": value.get("zoneId") or value.get("zone_id"),
                 "update_time": value.get("updateTime") or value.get("update_time"),
@@ -1644,14 +1741,14 @@ class NavienSmartApiClient:
             item = value[key]
             if isinstance(item, dict):
                 values[normalized_key] = {
-                    "value": item.get("value"),
+                    "value": cls._normalize_air_sensor_value(item.get("value")),
                     "level": item.get("level"),
                     "zone_id": item.get("zoneId") or item.get("zone_id"),
                     "update_time": item.get("updateTime") or item.get("update_time"),
                     "source": "mqtt",
                 }
             else:
-                values[normalized_key] = {"value": item, "source": "mqtt"}
+                values[normalized_key] = {"value": cls._normalize_air_sensor_value(item), "source": "mqtt"}
 
     @staticmethod
     def _normalize_air_sensor_key(value: Any) -> str | None:
@@ -1660,6 +1757,20 @@ class NavienSmartApiClient:
             return None
         key = str(value)
         return AIR_SENSOR_KEY_ALIASES.get(key.lower(), key)
+
+    @staticmethod
+    def _normalize_air_sensor_value(value: Any) -> Any:
+        """Return numeric air sensor values as numbers when possible."""
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text:
+            return value
+        numeric_text = text.replace(",", "")
+        try:
+            return float(numeric_text) if "." in numeric_text else int(numeric_text)
+        except ValueError:
+            return value
 
     @classmethod
     def _log_mqtt_payload_shape(cls, topic: str, payload: str) -> None:
@@ -1870,7 +1981,7 @@ class NavienSmartApiClient:
                 sensor_type = self._normalize_air_sensor_key(air.get("type"))
                 if sensor_type:
                     values[str(sensor_type)] = {
-                        "value": air.get("value"),
+                        "value": self._normalize_air_sensor_value(air.get("value")),
                         "level": air.get("level"),
                         "zone_id": sensor.get("zoneId"),
                         "update_time": sensor.get("updateTime"),
