@@ -63,6 +63,7 @@ def _device_diagnostics(device: Any) -> dict[str, Any]:
             "modelName": raw.get("modelName"),
             "modelDisplayName": raw.get("modelDisplayName"),
             "connected": raw.get("connected"),
+            "firmware": _firmware_summary(raw),
         },
         "sensor_profile": _redact(raw.get("sensorProfile") or device.sensor_profile or {}),
         "air_sensor_keys": sorted((device.air_sensors or {}).keys()),
@@ -90,6 +91,48 @@ def _device_diagnostics(device: Any) -> dict[str, Any]:
             for mode in device.modes
         ],
     }
+
+
+def _firmware_summary(raw: dict[str, Any]) -> dict[str, Any]:
+    """Return model/version fields from the raw device payload."""
+    data = raw.get("data") or {}
+    reported = ((data.get("did") or {}).get("reported") or {})
+    if not isinstance(reported, dict):
+        return {}
+    room_controller = reported.get("roomController") or {}
+    odu = reported.get("odu") or {}
+    idu = reported.get("idu") or {}
+    air_monitors = _list_value(reported.get("airMonitor"))
+    return {
+        "roomController": _model_version(room_controller),
+        "odu": _model_version(odu),
+        "idu": _model_version(idu),
+        "airMonitor": [
+            _model_version(item)
+            for item in air_monitors
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _model_version(value: Any) -> dict[str, Any]:
+    """Return common model/version fields."""
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "modelCode": value.get("modelCode"),
+        "version": value.get("version"),
+        "mountedAPS": value.get("mountedAPS"),
+    }
+
+
+def _list_value(value: Any) -> list[Any]:
+    """Return a list for values that may be encoded as a single object."""
+    if isinstance(value, list):
+        return value
+    if value in (None, ""):
+        return []
+    return [value]
 
 
 def _redact(value: Any) -> Any:

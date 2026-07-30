@@ -368,6 +368,7 @@ class NavienSmartApiClient:
                     "modelCode": raw_device.get("modelCode"),
                     "modelName": raw_device.get("modelName"),
                     "connected": raw_device.get("connected"),
+                    "firmware": self._diagnostic_firmware_summary(reported),
                     "icon": raw_device.get("icon"),
                     "mqttTopicKey_present": bool(raw_device.get("mqttTopicKey")),
                     "roomController": self._diagnostic_room_controller(room_controller),
@@ -396,6 +397,10 @@ class NavienSmartApiClient:
                     "modelCode": raw_device.get("modelCode"),
                     "modelName": raw_device.get("modelName"),
                     "connected": raw_device.get("connected"),
+                    "firmware": self._diagnostic_firmware_summary(
+                        (((raw_device.get("Properties") or {}).get("data") or {}).get("did") or {})
+                        .get("reported", {})
+                    ),
                     "supported_by_integration": self._is_supported_airone_device(raw_device),
                 }
                 for raw_device in self._all_raw_devices
@@ -410,6 +415,37 @@ class NavienSmartApiClient:
                 sorted(values)
                 for values in self._latest_air_sensors_by_device_id.values()
             ],
+        }
+
+    @classmethod
+    def _diagnostic_firmware_summary(cls, reported: dict[str, Any]) -> dict[str, Any]:
+        """Return model/version fields that explain payload differences."""
+        if not isinstance(reported, dict):
+            return {}
+        room_controller = reported.get("roomController") or {}
+        odu = reported.get("odu") or {}
+        idu = reported.get("idu") or {}
+        air_monitors = cls._list_value(reported.get("airMonitor"))
+        return {
+            "roomController": cls._diagnostic_model_version(room_controller),
+            "odu": cls._diagnostic_model_version(odu),
+            "idu": cls._diagnostic_model_version(idu),
+            "airMonitor": [
+                cls._diagnostic_model_version(item)
+                for item in air_monitors
+                if isinstance(item, dict)
+            ],
+        }
+
+    @staticmethod
+    def _diagnostic_model_version(value: Any) -> dict[str, Any]:
+        """Return common model/version fields from one capability object."""
+        if not isinstance(value, dict):
+            return {}
+        return {
+            "modelCode": value.get("modelCode"),
+            "version": value.get("version"),
+            "mountedAPS": value.get("mountedAPS"),
         }
 
     @classmethod
