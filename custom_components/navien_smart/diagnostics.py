@@ -37,6 +37,11 @@ async def async_get_config_entry_diagnostics(
             _device_diagnostics(device)
             for device in getattr(coordinator, "devices", [])
         ],
+        "client": (
+            coordinator.client.diagnostics_snapshot()
+            if coordinator is not None
+            else {}
+        ),
     }
 
 

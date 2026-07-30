@@ -328,6 +328,136 @@ class NavienSmartApiClient:
         """Set a callback fired when MQTT status changes."""
         self._status_update_callback = callback
 
+    def diagnostics_snapshot(self) -> dict[str, Any]:
+        """Return sanitized client internals useful for model support."""
+        raw_devices: list[dict[str, Any]] = []
+        for raw_device in self._raw_devices:
+            properties = raw_device.get("Properties") or {}
+            data = properties.get("data") or {}
+            reported = ((data.get("did") or {}).get("reported") or {})
+            room_controller = reported.get("roomController") or {}
+            odu = reported.get("odu") or {}
+            air_monitors = self._list_value(reported.get("airMonitor"))
+            raw_devices.append(
+                {
+                    "deviceSeq": "**REDACTED**",
+                    "deviceId": "**REDACTED**",
+                    "serviceCode": raw_device.get("serviceCode"),
+                    "modelCode": raw_device.get("modelCode"),
+                    "modelName": raw_device.get("modelName"),
+                    "connected": raw_device.get("connected"),
+                    "icon": raw_device.get("icon"),
+                    "mqttTopicKey_present": bool(raw_device.get("mqttTopicKey")),
+                    "roomController": self._diagnostic_room_controller(room_controller),
+                    "odu": {
+                        "modelCode": odu.get("modelCode"),
+                        "version": odu.get("version"),
+                        "mountedAPS": odu.get("mountedAPS"),
+                        "additionalData": self._additional_data_summary(odu),
+                    },
+                    "airMonitor": [
+                        self._diagnostic_air_monitor(item)
+                        for item in air_monitors
+                        if isinstance(item, dict)
+                    ],
+                    "data_top_keys": self._safe_keys(data),
+                    "reported_top_keys": self._safe_keys(reported),
+                }
+            )
+        return {
+            "mqtt_connected": self._mqtt_connected,
+            "raw_devices": raw_devices,
+            "latest_status": [
+                self._diagnostic_status(status)
+                for status in self._latest_status_by_device_id.values()
+            ],
+            "latest_air_sensor_keys": [
+                sorted(values)
+                for values in self._latest_air_sensors_by_device_id.values()
+            ],
+        }
+
+    @classmethod
+    def _diagnostic_room_controller(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Return a sanitized room controller capability summary."""
+        modes = value.get("mode") if isinstance(value, dict) else None
+        mode_items = modes if isinstance(modes, list) else []
+        return {
+            "deviceId": "**REDACTED**" if value.get("deviceId") else None,
+            "modelCode": value.get("modelCode"),
+            "version": value.get("version"),
+            "zoneId": value.get("zoneId"),
+            "zoneNickname_present": bool(value.get("zoneNickname")),
+            "state": value.get("state"),
+            "running": value.get("running"),
+            "mode_count": len(mode_items),
+            "mode_items": [cls._diagnostic_mode_item(item) for item in mode_items],
+            "sensor_count": len(cls._list_value(value.get("sensor"))),
+            "subRoomController_count": len(cls._list_value(value.get("subRoomController"))),
+            "additionalData": cls._additional_data_summary(value),
+            "keys": cls._safe_keys(value),
+        }
+
+    @classmethod
+    def _diagnostic_mode_item(cls, item: Any) -> dict[str, Any]:
+        """Return mode capability fields used by this integration."""
+        if not isinstance(item, dict):
+            return {"type": type(item).__name__}
+        return {
+            "name": item.get("name"),
+            "group": item.get("group"),
+            "option": item.get("option"),
+            "airVolume": item.get("airVolume"),
+            "configurable": item.get("configurable"),
+            "supportedAirVolumes": item.get("supportedAirVolumes"),
+            "additionalData": cls._additional_data_summary(item),
+            "keys": cls._safe_keys(item),
+        }
+
+    @classmethod
+    def _diagnostic_air_monitor(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Return sanitized air monitor capability fields."""
+        sensors = cls._list_value(value.get("sensor"))
+        return {
+            "deviceId": "**REDACTED**" if value.get("deviceId") else None,
+            "modelCode": value.get("modelCode"),
+            "version": value.get("version"),
+            "zoneId": value.get("zoneId"),
+            "sensor_count": len(sensors),
+            "sensor_items": [
+                {
+                    "type": sensor.get("type"),
+                    "min": sensor.get("min"),
+                    "max": sensor.get("max"),
+                    "keys": cls._safe_keys(sensor),
+                }
+                for sensor in sensors
+                if isinstance(sensor, dict)
+            ],
+            "additionalData": cls._additional_data_summary(value),
+            "keys": cls._safe_keys(value),
+        }
+
+    @classmethod
+    def _diagnostic_status(cls, status: dict[str, Any]) -> dict[str, Any]:
+        """Return sanitized latest MQTT status fields."""
+        return {
+            "deviceId": "**REDACTED**" if status.get("deviceId") else None,
+            "running": status.get("running"),
+            "mode": status.get("mode"),
+            "option": status.get("option"),
+            "airVolume": status.get("airVolume"),
+            "concentration": status.get("concentration"),
+            "modelCode": status.get("modelCode"),
+            "zoneId": status.get("zoneId"),
+            "zoneNickname_present": bool(status.get("zoneNickname")),
+            "additionalData": cls._additional_data_summary(status),
+            "airMonitor_keys": cls._safe_keys(status.get("airMonitor")),
+            "airSensorData_keys": cls._safe_keys(status.get("airSensorData")),
+            "subRoomController_count": len(cls._list_value(status.get("subRoomController"))),
+            "keys": cls._safe_keys(status),
+        }
+
     async def async_get_cached_devices(self) -> list[NavienDevice]:
         """Return devices using the latest cached raw devices and MQTT state."""
         normalized = [await self._normalize_device(device) for device in self._raw_devices]
