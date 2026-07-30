@@ -57,6 +57,25 @@ Home Assistant에서 경동나비엔 **제습환기청정기**를 연동하기 �
 
 ## 설치 방법
 
+### HACS로 설치
+
+HACS에서 커스텀 저장소로 추가해서 설치할 수 있습니다.
+
+1. HACS를 엽니다.
+2. 오른쪽 위 메뉴에서 `Custom repositories`를 선택합니다.
+3. 저장소 주소를 입력합니다.
+
+```text
+https://github.com/jhkwon19/NavienSmart
+```
+
+4. Category는 `Integration`을 선택합니다.
+5. 추가 후 `Navien Smart`를 설치합니다.
+6. Home Assistant를 재시작합니다.
+7. `설정 > 기기 및 서비스 > 통합 구성요소 추가`에서 `Navien Smart`를 추가합니다.
+
+### 수동 설치
+
 1. 이 저장소를 내려받습니다.
 2. Home Assistant 설정 폴더 아래에 `custom_components/navien_smart` 폴더를 복사합니다.
 
