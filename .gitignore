@@ -1,0 +1,40 @@
+# Python / Home Assistant caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments
+.venv/
+venv/
+.env
+.env.*
+
+# Home Assistant local state / secrets
+.storage/
+secrets.yaml
+known_devices.yaml
+home-assistant.log*
+
+# Analysis artifacts and private captures
+artifacts/
+tools/
+docs/
+*.apk
+*.dex
+*.pcap
+*.har
+*.log
+logcat*.txt
+
+# Experimental local protocol integration, not for public release yet
+custom_components/navien_smart_local/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
