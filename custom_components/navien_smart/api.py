@@ -1646,8 +1646,11 @@ class NavienSmartApiClient:
         mode = value.get("mode")
         if isinstance(mode, list):
             return False
-        status_keys = {"running", "isRun", "enable", "mode", "option", "airVolume", "additionalData"}
-        return len(status_keys.intersection(value)) >= 2
+        primary_status_keys = {"running", "isRun", "enable", "state", "power", "mode"}
+        if not primary_status_keys.intersection(value):
+            return False
+        status_keys = {*primary_status_keys, "option", "airVolume", "additionalData"}
+        return len(status_keys.intersection(value)) >= 1
 
     @classmethod
     def _merge_mqtt_target_humidity(
