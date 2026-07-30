@@ -66,7 +66,7 @@ HACS에서 커스텀 저장소로 추가해서 설치할 수 있습니다.
 3. 저장소 주소를 입력합니다.
 
 ```text
-https://github.com/jhkwon19/NavienSmart
+https://github.com/jhkwon19/ha-navien-smart
 ```
 
 4. Category는 `Integration`을 선택합니다.
