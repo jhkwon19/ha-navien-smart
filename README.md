@@ -1,4 +1,4 @@
-# Navien Smart
+# Navien Airone for Home Assistant
 
 Home Assistant에서 경동나비엔 **제습환기청정기**를 연동하기 위한 비공식 커스텀 통합 구성요소입니다.
 
