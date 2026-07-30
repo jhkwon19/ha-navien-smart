@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -26,6 +30,7 @@ class NavienSmartSensorDescription:
     name: str
     native_unit: str | None = None
     device_class: SensorDeviceClass | None = None
+    state_class: SensorStateClass | None = SensorStateClass.MEASUREMENT
 
 
 AIR_SENSOR_DESCRIPTIONS: tuple[NavienSmartSensorDescription, ...] = (
@@ -41,13 +46,13 @@ AIR_SENSOR_DESCRIPTIONS: tuple[NavienSmartSensorDescription, ...] = (
         native_unit=PERCENTAGE,
         device_class=SensorDeviceClass.HUMIDITY,
     ),
-    NavienSmartSensorDescription(key="pm1Dot0", name="PM1.0", native_unit="ug/m3"),
-    NavienSmartSensorDescription(key="pm2Dot5", name="PM2.5", native_unit="ug/m3"),
-    NavienSmartSensorDescription(key="pm10", name="PM10", native_unit="ug/m3"),
+    NavienSmartSensorDescription(key="pm1Dot0", name="PM1.0", native_unit="µg/m³"),
+    NavienSmartSensorDescription(key="pm2Dot5", name="PM2.5", native_unit="µg/m³"),
+    NavienSmartSensorDescription(key="pm10", name="PM10", native_unit="µg/m³"),
     NavienSmartSensorDescription(key="co2", name="CO2", native_unit="ppm"),
-    NavienSmartSensorDescription(key="tvoc", name="TVOC"),
+    NavienSmartSensorDescription(key="tvoc", name="TVOC", native_unit="µg/m³"),
     NavienSmartSensorDescription(key="total", name="Air Quality Score"),
-    NavienSmartSensorDescription(key="radon", name="Radon", native_unit="Bq/m3"),
+    NavienSmartSensorDescription(key="radon", name="Radon", native_unit="Bq/m³"),
 )
 
 AIR_MONITOR_NAME = "Navien Air Monitor"
@@ -91,6 +96,7 @@ class NavienSmartAirSensor(
         self._attr_name = description.name
         self._attr_native_unit_of_measurement = description.native_unit
         self._attr_device_class = description.device_class
+        self._attr_state_class = description.state_class
 
     @property
     def device(self) -> NavienDevice | None:
