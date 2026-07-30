@@ -870,7 +870,7 @@ class NavienSmartApiClient:
             status,
             room_controller,
             self._reported_room_controller(raw_device),
-            keys=("running", "isRun", "state", "power", "enable"),
+            keys=("running", "isRun", "state", "power"),
         )
         power = self._power_from_running_value(running)
         if power is not None:
@@ -1646,7 +1646,7 @@ class NavienSmartApiClient:
         mode = value.get("mode")
         if isinstance(mode, list):
             return False
-        primary_status_keys = {"running", "isRun", "enable", "state", "power", "mode"}
+        primary_status_keys = {"running", "isRun", "state", "power", "mode"}
         if not primary_status_keys.intersection(value):
             return False
         status_keys = {*primary_status_keys, "option", "airVolume", "additionalData"}
