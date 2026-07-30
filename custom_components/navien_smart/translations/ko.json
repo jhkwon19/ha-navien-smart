@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "나비엔 스마트",
+        "title": "나비엔 에어원",
         "description": "나비엔 스마트 계정 정보를 입력하세요.",
         "data": {
           "username": "아이디",
@@ -19,4 +19,3 @@
     }
   }
 }
-

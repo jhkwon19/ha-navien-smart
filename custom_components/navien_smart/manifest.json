@@ -1,6 +1,6 @@
 {
   "domain": "navien_smart",
-  "name": "Navien Smart",
+  "name": "Navien Airone",
   "codeowners": ["@jhkwon19"],
   "config_flow": true,
   "documentation": "https://github.com/jhkwon19/ha-navien-smart",

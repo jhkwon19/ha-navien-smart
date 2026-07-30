@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Navien Smart",
+        "title": "Navien Airone",
         "description": "Enter your Navien Smart account credentials.",
         "data": {
           "username": "ID",
@@ -19,4 +19,3 @@
     }
   }
 }
-

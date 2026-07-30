@@ -70,9 +70,9 @@ https://github.com/jhkwon19/ha-navien-smart
 ```
 
 4. Category는 `Integration`을 선택합니다.
-5. 추가 후 `Navien Smart`를 설치합니다.
+5. 추가 후 `Navien Airone`을 설치합니다.
 6. Home Assistant를 재시작합니다.
-7. `설정 > 기기 및 서비스 > 통합 구성요소 추가`에서 `Navien Smart`를 추가합니다.
+7. `설정 > 기기 및 서비스 > 통합 구성요소 추가`에서 `Navien Airone`을 추가합니다.
 
 ### 수동 설치
 
@@ -91,7 +91,7 @@ config/
 ```
 
 3. Home Assistant를 재시작합니다.
-4. `설정 > 기기 및 서비스 > 통합 구성요소 추가`에서 `Navien Smart`를 검색합니다.
+4. `설정 > 기기 및 서비스 > 통합 구성요소 추가`에서 `Navien Airone`을 검색합니다.
 5. 나비엔 스마트 앱에서 사용하는 아이디와 비밀번호를 입력합니다.
 
 ## 주의사항
