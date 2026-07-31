@@ -130,6 +130,14 @@ class NavienSmartFanSelect(NavienSmartSelectBase):
         return [fan.name for fan in mode.fan_options]
 
     @property
+    def available(self) -> bool:
+        """Return whether fan selection is available for the current mode."""
+        if not super().available:
+            return False
+        mode = self._current_mode()
+        return mode is not None and _mode_has_selectable_fan(mode)
+
+    @property
     def current_option(self) -> str | None:
         """Return selected fan option."""
         mode = self._current_mode()
@@ -146,7 +154,7 @@ class NavienSmartFanSelect(NavienSmartSelectBase):
     async def async_select_option(self, option: str) -> None:
         """Select a fan option."""
         mode = self._current_mode()
-        if mode is None:
+        if mode is None or not _mode_has_selectable_fan(mode):
             return
         for fan in mode.fan_options:
             if fan.name == option:
@@ -180,3 +188,8 @@ def _default_fan_for_mode(mode: NavienMode) -> NavienFanOption | None:
         if fan.option == mode.option and fan.air_volume == mode.air_volume:
             return fan
     return mode.fan_options[0] if mode.fan_options else None
+
+
+def _mode_has_selectable_fan(mode: NavienMode) -> bool:
+    """Return whether users can change fan options in this mode."""
+    return any(fan.configurable for fan in mode.fan_options)
