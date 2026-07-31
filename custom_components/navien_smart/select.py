@@ -9,7 +9,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import NavienDevice, NavienFanOption, NavienMode
+from .api import NRT530_AIR_MONITOR_MODEL_NAMES, NavienDevice, NavienFanOption, NavienMode
 from .const import DOMAIN
 from .coordinator import NavienSmartDataUpdateCoordinator
 
@@ -26,6 +26,8 @@ async def async_setup_entry(
         if device.modes:
             entities.append(NavienSmartModeSelect(coordinator, device))
             entities.append(NavienSmartFanSelect(coordinator, device))
+        if _has_air_monitor_led(device):
+            entities.append(NavienSmartAirMonitorLedSelect(coordinator, device))
     async_add_entities(entities)
 
 
@@ -167,6 +169,66 @@ class NavienSmartFanSelect(NavienSmartSelectBase):
         return device.modes[0]
 
 
+class NavienSmartAirMonitorLedSelect(NavienSmartSelectBase):
+    """External air monitor LED brightness selector."""
+
+    _attr_icon = "mdi:brightness-6"
+
+    def __init__(
+        self,
+        coordinator: NavienSmartDataUpdateCoordinator,
+        device: NavienDevice,
+    ) -> None:
+        super().__init__(coordinator, device, "air_monitor_led_brightness", "LED 밝기")
+
+    @property
+    def options(self) -> list[str]:
+        """Return brightness steps shown by the Navien app."""
+        return ["1단계", "2단계", "3단계", "4단계"]
+
+    @property
+    def current_option(self) -> str | None:
+        """Return selected brightness step."""
+        device = self.device
+        if device is None or device.air_monitor_led_brightness is None:
+            return None
+        return f"{device.air_monitor_led_brightness + 1}단계"
+
+    async def async_select_option(self, option: str) -> None:
+        """Select LED brightness."""
+        if option not in self.options:
+            return
+        level = self.options.index(option)
+        await self.coordinator.client.async_set_air_monitor_led_brightness(
+            self._device_id,
+            level,
+        )
+        await self.coordinator.async_request_refresh()
+
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        """Group LED brightness under the air monitor device when possible."""
+        device = self.device
+        if device is None:
+            return None
+        profile = device.sensor_profile or {}
+        raw = device.raw or {}
+        sensor_device_id = str(profile.get("deviceId") or raw.get("deviceId") or device.id)
+        if profile.get("source") == "external_air_monitor":
+            model = profile.get("modelName") or "Air Monitor"
+            model_code = profile.get("modelCode")
+            if model_code:
+                model = f"{model} ({model_code})"
+            return DeviceInfo(
+                identifiers={(DOMAIN, f"{device.id}_air_monitor_{sensor_device_id}")},
+                manufacturer="KyungDong Navien",
+                name="에어모니터",
+                model=str(model) if model else None,
+                serial_number=sensor_device_id,
+            )
+        return super().device_info
+
+
 def _mode_by_key(device: NavienDevice, key: str) -> NavienMode | None:
     """Find a mode by key."""
     return next((mode for mode in device.modes if mode.key == key), None)
@@ -188,3 +250,13 @@ def _default_fan_for_mode(mode: NavienMode) -> NavienFanOption | None:
 def _mode_has_selectable_fan(mode: NavienMode) -> bool:
     """Return whether users can change fan options in this mode."""
     return any(fan.configurable for fan in mode.fan_options)
+
+
+def _has_air_monitor_led(device: NavienDevice) -> bool:
+    """Return whether the device exposes an external air monitor LED capability."""
+    profile = device.sensor_profile or {}
+    return (
+        profile.get("source") == "external_air_monitor"
+        and bool(profile.get("deviceId"))
+        and str(profile.get("modelCode") or "") in NRT530_AIR_MONITOR_MODEL_NAMES
+    )

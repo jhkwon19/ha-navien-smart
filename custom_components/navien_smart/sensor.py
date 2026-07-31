@@ -14,6 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -66,13 +67,20 @@ async def async_setup_entry(
 ) -> None:
     """Set up Navien Smart sensor entities."""
     coordinator: NavienSmartDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[NavienSmartAirSensor] = []
+    entities: list[SensorEntity] = []
     for device in coordinator.devices:
         air_sensors = device.air_sensors or {}
         entities.extend(
             NavienSmartAirSensor(coordinator, device, description)
             for description in AIR_SENSOR_DESCRIPTIONS
             if description.key in air_sensors
+        )
+        if device.modes:
+            entities.append(NavienSmartOperationStateSensor(coordinator, device))
+            entities.append(NavienSmartErrorStateSensor(coordinator, device))
+        entities.extend(
+            NavienSmartFilterSensor(coordinator, device, index)
+            for index, _filter in enumerate(device.filters)
         )
     async_add_entities(entities)
 
@@ -195,3 +203,207 @@ class NavienSmartAirSensor(
             if isinstance(profile, dict):
                 return profile
         return {}
+
+
+class NavienSmartOperationStateSensor(
+    CoordinatorEntity[NavienSmartDataUpdateCoordinator],
+    SensorEntity,
+):
+    """Human-readable operation state for a Navien ventilation device."""
+
+    _attr_name = "운전 상태"
+    _attr_icon = "mdi:fan"
+
+    def __init__(
+        self,
+        coordinator: NavienSmartDataUpdateCoordinator,
+        device: NavienDevice,
+    ) -> None:
+        super().__init__(coordinator)
+        self._device_id = device.id
+        self._attr_unique_id = f"{device.id}_operation_state"
+
+    @property
+    def device(self) -> NavienDevice | None:
+        """Return the latest device snapshot."""
+        return self.coordinator.device_by_id(self._device_id)
+
+    @property
+    def native_value(self) -> str | None:
+        """Return operation state text."""
+        return self.device.running_name if self.device else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return state metadata useful for diagnostics and automations."""
+        device = self.device
+        if device is None:
+            return None
+        attrs = {
+            "running": device.running,
+            "power": device.power,
+            "mode": device.current_mode_key,
+            "fan": device.current_fan_key,
+            "target_humidity": device.target_humidity,
+        }
+        return {key: value for key, value in attrs.items() if value is not None} or None
+
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        """Return device registry information."""
+        if self.device is None:
+            return None
+        raw = self.device.raw or {}
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.device.id)},
+            manufacturer="KyungDong Navien",
+            name=self.device.name,
+            model=str(raw.get("modelDisplayName") or raw.get("modelCode"))
+            if raw.get("modelDisplayName") or raw.get("modelCode")
+            else None,
+            serial_number=str(raw.get("deviceId")) if raw.get("deviceId") else None,
+        )
+
+
+class NavienSmartErrorStateSensor(
+    CoordinatorEntity[NavienSmartDataUpdateCoordinator],
+    SensorEntity,
+):
+    """Human-readable error state for a Navien ventilation device."""
+
+    _attr_name = "오류"
+    _attr_icon = "mdi:check-circle-outline"
+
+    def __init__(
+        self,
+        coordinator: NavienSmartDataUpdateCoordinator,
+        device: NavienDevice,
+    ) -> None:
+        super().__init__(coordinator)
+        self._device_id = device.id
+        self._attr_unique_id = f"{device.id}_error_state"
+
+    @property
+    def device(self) -> NavienDevice | None:
+        """Return the latest device snapshot."""
+        return self.coordinator.device_by_id(self._device_id)
+
+    @property
+    def native_value(self) -> str | None:
+        """Return error state text."""
+        device = self.device
+        if device is None or device.error_code is None:
+            return None
+        if device.error_code == 0:
+            return "문제없음"
+        return device.error_text or f"오류 코드 {device.error_code}"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return raw error metadata."""
+        device = self.device
+        if device is None:
+            return None
+        attrs = {
+            "error_code": device.error_code,
+            "error_text": device.error_text,
+        }
+        return {key: value for key, value in attrs.items() if value is not None} or None
+
+    @property
+    def icon(self) -> str:
+        """Return an icon matching the error state."""
+        device = self.device
+        if device is not None and device.error_code not in (None, 0):
+            return "mdi:alert-circle-outline"
+        return "mdi:check-circle-outline"
+
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        """Return device registry information."""
+        if self.device is None:
+            return None
+        raw = self.device.raw or {}
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.device.id)},
+            manufacturer="KyungDong Navien",
+            name=self.device.name,
+            model=str(raw.get("modelDisplayName") or raw.get("modelCode"))
+            if raw.get("modelDisplayName") or raw.get("modelCode")
+            else None,
+            serial_number=str(raw.get("deviceId")) if raw.get("deviceId") else None,
+        )
+
+
+class NavienSmartFilterSensor(
+    CoordinatorEntity[NavienSmartDataUpdateCoordinator],
+    SensorEntity,
+):
+    """Filter usage sensor for a Navien ventilation device."""
+
+    _attr_icon = "mdi:air-filter"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator: NavienSmartDataUpdateCoordinator,
+        device: NavienDevice,
+        index: int,
+    ) -> None:
+        super().__init__(coordinator)
+        self._device_id = device.id
+        self._index = index
+        self._attr_unique_id = f"{device.id}_filter_{index}"
+        count = len(device.filters)
+        self._attr_name = "필터 사용률" if count == 1 else f"필터 {index + 1} 사용률"
+
+    @property
+    def device(self) -> NavienDevice | None:
+        """Return the latest device snapshot."""
+        return self.coordinator.device_by_id(self._device_id)
+
+    @property
+    def native_value(self) -> int | None:
+        """Return filter usage percentage."""
+        data = self._filter
+        if data is None:
+            return None
+        return data.get("percent")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return filter metadata."""
+        data = self._filter
+        if data is None:
+            return None
+        attrs = {
+            "filter_type": data.get("type"),
+            "replace_period": data.get("replace_period"),
+        }
+        return {key: value for key, value in attrs.items() if value is not None} or None
+
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        """Return device registry information."""
+        if self.device is None:
+            return None
+        raw = self.device.raw or {}
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.device.id)},
+            manufacturer="KyungDong Navien",
+            name=self.device.name,
+            model=str(raw.get("modelDisplayName") or raw.get("modelCode"))
+            if raw.get("modelDisplayName") or raw.get("modelCode")
+            else None,
+            serial_number=str(raw.get("deviceId")) if raw.get("deviceId") else None,
+        )
+
+    @property
+    def _filter(self) -> dict[str, Any] | None:
+        """Return the latest filter snapshot."""
+        device = self.device
+        if device is None or self._index >= len(device.filters):
+            return None
+        return device.filters[self._index]

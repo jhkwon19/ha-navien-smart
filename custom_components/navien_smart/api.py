@@ -76,10 +76,16 @@ class NavienDevice:
     current_temperature: float | None = None
     target_temperature: float | None = None
     target_humidity: int | None = None
+    running: int | None = None
+    running_name: str | None = None
+    error_code: int | None = None
+    error_text: str | None = None
     current_mode_key: str | None = None
     current_fan_key: str | None = None
     modes: tuple[NavienMode, ...] = ()
     air_sensors: dict[str, dict[str, Any]] | None = None
+    filters: tuple[dict[str, Any], ...] = ()
+    air_monitor_led_brightness: int | None = None
     sensor_profile: dict[str, Any] | None = None
     raw: dict[str, Any] | None = None
 
@@ -673,6 +679,37 @@ class NavienSmartApiClient:
             target_humidity=humidity,
         )
 
+    async def async_set_air_monitor_led_brightness(self, device_id: str, level: int) -> None:
+        """Set external air monitor LED brightness."""
+        if level < 0 or level > 3:
+            raise NavienSmartApiError("Air monitor LED brightness must be between 0 and 3")
+        device = self._device_for_control(device_id)
+        profile = device.sensor_profile or {}
+        if (
+            profile.get("source") != "external_air_monitor"
+            or str(profile.get("modelCode") or "") not in NRT530_AIR_MONITOR_MODEL_NAMES
+        ):
+            raise NavienSmartUnsupportedError(
+                "Air monitor LED brightness is only mapped for verified external air monitor models"
+            )
+        air_monitor_device_id = self._air_monitor_device_id(device)
+        if not air_monitor_device_id:
+            raise NavienSmartUnsupportedError("This Navien device has no mapped air monitor LED")
+        desired = {
+            "airMonitor": {
+                "deviceId": air_monitor_device_id,
+                "additionalData": [{"type": 1, "value": int(level)}],
+            }
+        }
+        await self._async_send_control(device, "brightness", desired)
+        self._optimistic_state.setdefault(device_id, {})["air_monitor_led_brightness"] = int(level)
+
+    async def async_reset_filter(self, device_id: str, filter_type: int = 1) -> None:
+        """Reset the Navien ventilation filter usage counter."""
+        device = self._device_for_control(device_id)
+        desired = {"odu": {"filter": [{"type": int(filter_type)}]}}
+        await self._async_send_control(device, "filter-reset", desired)
+
     async def _normalize_device(self, raw_device: dict[str, Any]) -> NavienDevice:
         """Convert a Navien device payload into a stable integration shape."""
         properties = raw_device.get("Properties") or {}
@@ -698,9 +735,12 @@ class NavienSmartApiClient:
         if mqtt_air_sensors:
             air_sensors = {**air_sensors, **mqtt_air_sensors}
         sensor_profile = self._nrt530_sensor_profile(raw_device, air_sensors)
+        filters = self._extract_filters(raw_device)
+        led_brightness = self._extract_air_monitor_led_brightness(raw_device)
         modes = self._extract_modes(raw_device)
         current_state = self._extract_current_state(raw_device, modes)
         optimistic = self._optimistic_state.get(device_seq, {})
+        led_brightness = optimistic.get("air_monitor_led_brightness", led_brightness)
         target_humidity = current_state.get("target_humidity", optimistic.get("target_humidity"))
         optimistic_target = optimistic.get("target_humidity")
         optimistic_target_updated_at = optimistic.get("target_humidity_updated_at")
@@ -723,10 +763,16 @@ class NavienSmartApiClient:
             power=current_state.get("power", optimistic.get("power")),
             current_temperature=current_temperature,
             target_humidity=target_humidity,
+            running=current_state.get("running"),
+            running_name=current_state.get("running_name"),
+            error_code=current_state.get("error_code"),
+            error_text=current_state.get("error_text"),
             current_mode_key=current_state.get("current_mode_key", optimistic.get("current_mode_key")),
             current_fan_key=current_state.get("current_fan_key", optimistic.get("current_fan_key")),
             modes=modes,
             air_sensors=air_sensors,
+            filters=filters,
+            air_monitor_led_brightness=led_brightness,
             sensor_profile=sensor_profile,
             raw={
                 "deviceSeq": raw_device.get("deviceSeq"),
@@ -740,6 +786,86 @@ class NavienSmartApiClient:
                 "data": (raw_device.get("Properties") or {}).get("data") or {},
             },
         )
+
+    def _extract_filters(self, raw_device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+        """Extract ODU filter status and metadata."""
+        properties = raw_device.get("Properties") or {}
+        data = properties.get("data") or {}
+        reported = ((data.get("did") or {}).get("reported") or {})
+        reported_odu = reported.get("odu") or {}
+        physical_device_id = raw_device.get("deviceId")
+        status = (
+            self._latest_status_by_device_id.get(str(physical_device_id))
+            if physical_device_id is not None
+            else None
+        )
+        status_odu = status.get("odu") if isinstance(status, dict) else None
+        reported_filters = (
+            reported_odu.get("filter") if isinstance(reported_odu, dict) else None
+        )
+        status_filters = status_odu.get("filter") if isinstance(status_odu, dict) else None
+        reported_items = reported_filters if isinstance(reported_filters, list) else []
+        status_items = status_filters if isinstance(status_filters, list) else []
+        count = max(len(reported_items), len(status_items))
+        if count == 0:
+            return ()
+        result: list[dict[str, Any]] = []
+        for index in range(count):
+            metadata = reported_items[index] if index < len(reported_items) else {}
+            status_item = status_items[index] if index < len(status_items) else {}
+            metadata = metadata if isinstance(metadata, dict) else {}
+            status_item = status_item if isinstance(status_item, dict) else {}
+            item = {**metadata, **status_item}
+            usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
+            result.append(
+                {
+                    "type": self._int_value(item.get("type")),
+                    "percent": self._int_value(usage.get("percent")),
+                    "replace_period": self._int_value(item.get("replacePeriod")),
+                    "raw": item,
+                }
+            )
+        return tuple(result)
+
+    def _extract_air_monitor_led_brightness(self, raw_device: dict[str, Any]) -> int | None:
+        """Extract air monitor LED brightness when it appears in status payloads."""
+        properties = raw_device.get("Properties") or {}
+        data = properties.get("data") or {}
+        reported = ((data.get("did") or {}).get("reported") or {})
+        physical_device_id = raw_device.get("deviceId")
+        candidates: list[Any] = []
+        if physical_device_id is not None:
+            status = self._latest_status_by_device_id.get(str(physical_device_id))
+            if isinstance(status, dict):
+                candidates.append(status)
+        candidates.extend(self._list_value(reported.get("airMonitor")))
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            for item in self._additional_data_items(candidate):
+                if not isinstance(item, dict) or item.get("type") != 1:
+                    continue
+                if "min" in item or "max" in item:
+                    continue
+                value = self._int_value(item.get("value"))
+                if value is not None and 0 <= value <= 3:
+                    return value
+        return None
+
+    @classmethod
+    def _air_monitor_device_id(cls, device: NavienDevice) -> str | None:
+        """Return the external air monitor device id used by brightness commands."""
+        profile = device.sensor_profile or {}
+        device_id = profile.get("deviceId")
+        if device_id:
+            return str(device_id)
+        raw = device.raw or {}
+        data = raw.get("data") or {}
+        reported = ((data.get("did") or {}).get("reported") or {})
+        for item in cls._list_value(reported.get("airMonitor")):
+            if isinstance(item, dict) and item.get("deviceId"):
+                return str(item["deviceId"])
+        return None
 
     def _nrt530_sensor_profile(
         self,
@@ -872,11 +998,26 @@ class NavienSmartApiClient:
             status,
             room_controller,
             self._reported_room_controller(raw_device),
+            self._reported_odu(raw_device),
             keys=("running", "isRun", "state", "power"),
         )
+        running_value = self._running_from_value(running)
+        if running_value is not None:
+            state["running"] = running_value
+            state["running_name"] = self._running_name(running_value)
         power = self._power_from_running_value(running)
         if power is not None:
             state["power"] = power
+
+        error_code = self._error_code_from_status(
+            status,
+            room_controller,
+            self._reported_room_controller(raw_device),
+            self._reported_odu(raw_device),
+        )
+        if error_code is not None:
+            state["error_code"] = error_code
+            state["error_text"] = "문제없음" if error_code == 0 else f"오류 {error_code}"
 
         mode_code = self._int_value(status.get("mode"))
         mode_option = self._int_value(status.get("option"), default=1)
@@ -970,6 +1111,15 @@ class NavienSmartApiClient:
         return {}
 
     @staticmethod
+    def _reported_odu(raw_device: dict[str, Any]) -> dict[str, Any]:
+        """Return the reported ODU capability/status object."""
+        properties = raw_device.get("Properties") or {}
+        data = properties.get("data") or {}
+        reported = ((data.get("did") or {}).get("reported") or {})
+        odu = reported.get("odu")
+        return odu if isinstance(odu, dict) else {}
+
+    @staticmethod
     def _reported_room_controller(raw_device: dict[str, Any]) -> dict[str, Any]:
         """Return DID reported roomController, including capability-shaped payloads."""
         properties = raw_device.get("Properties") or {}
@@ -1005,6 +1155,70 @@ class NavienSmartApiClient:
             return True
         if text in {"off", "false", "stop", "stopped", "0", "2", "n", "no"}:
             return False
+        return None
+
+    @classmethod
+    def _running_from_value(cls, value: Any) -> int | None:
+        """Map Navien running/state values to the normalized running code."""
+        int_value = cls._int_value(value)
+        if int_value is not None:
+            return 2 if int_value == 0 else int_value
+        text = str(value).strip().lower()
+        if text in {"on", "true", "run", "running", "1", "y", "yes"}:
+            return 1
+        if text in {"off", "false", "stop", "stopped", "0", "2", "n", "no"}:
+            return 2
+        if text in {"away", "out", "3"}:
+            return 3
+        return None
+
+    @staticmethod
+    def _running_name(value: int) -> str:
+        """Return display name for a Navien running code."""
+        return {1: "운전", 2: "정지", 3: "외출"}.get(value, f"알 수 없음({value})")
+
+    @classmethod
+    def _error_code_from_status(cls, *values: Any) -> int | None:
+        """Extract an error code from common room controller and ODU shapes."""
+        for value in values:
+            code = cls._error_code_from_value(value)
+            if code is not None:
+                return code
+        return None
+
+    @classmethod
+    def _error_code_from_value(cls, value: Any) -> int | None:
+        """Extract an error code from one status-like value."""
+        if value in (None, ""):
+            return None
+        if isinstance(value, bool):
+            return 1 if value else 0
+        if isinstance(value, (int, float, str)):
+            return cls._int_value(value)
+        if isinstance(value, list):
+            if not value:
+                return 0
+            for item in value:
+                code = cls._error_code_from_value(item)
+                if code is not None and code != 0:
+                    return code
+            return 0
+        if not isinstance(value, dict):
+            return None
+        for key in ("errorCode", "code", "value"):
+            if key in value:
+                code = cls._error_code_from_value(value.get(key))
+                if code is not None:
+                    return code
+        for key in ("error", "displayedError"):
+            if key not in value:
+                continue
+            error_value = value.get(key)
+            if error_value in (None, "", {}, []):
+                return 0
+            code = cls._error_code_from_value(error_value)
+            if code is not None:
+                return code
         return None
 
     @staticmethod
@@ -1568,6 +1782,9 @@ class NavienSmartApiClient:
         LOGGER.debug("Navien Smart MQTT message received topic=%s payload_length=%s", topic, len(payload))
         self._log_mqtt_payload_shape(topic, payload)
         status = self._extract_mqtt_room_controller_status(payload)
+        odu_status = self._extract_mqtt_odu_status(payload)
+        if status and odu_status:
+            status = {**status, "odu": odu_status}
         status = self._merge_mqtt_target_humidity(status, payload)
         physical_device_id = (
             status.get("deviceId")
@@ -1618,6 +1835,56 @@ class NavienSmartApiClient:
             if cls._looks_like_room_controller_status(candidate):
                 return candidate
         return cls._find_room_controller_status(data)
+
+    @classmethod
+    def _extract_mqtt_odu_status(cls, payload: str) -> dict[str, Any]:
+        """Extract ODU status from known AirOne MQTT payload shapes."""
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+
+        candidates = [
+            (((data.get("payload") or {}).get("reported") or {}).get("odu")),
+            (((data.get("state") or {}).get("reported") or {}).get("odu")),
+            ((data.get("reported") or {}).get("odu")),
+            data.get("odu"),
+        ]
+        for candidate in candidates:
+            if cls._looks_like_odu_status(candidate):
+                return candidate
+        return cls._find_odu_status(data)
+
+    @classmethod
+    def _find_odu_status(cls, value: Any) -> dict[str, Any]:
+        """Find an ODU status object in nested MQTT payloads."""
+        if isinstance(value, list):
+            for item in value:
+                found = cls._find_odu_status(item)
+                if found:
+                    return found
+            return {}
+        if not isinstance(value, dict):
+            return {}
+
+        odu = value.get("odu")
+        if cls._looks_like_odu_status(odu):
+            return odu
+        if cls._looks_like_odu_status(value):
+            return value
+
+        for item in value.values():
+            found = cls._find_odu_status(item)
+            if found:
+                return found
+        return {}
+
+    @staticmethod
+    def _looks_like_odu_status(value: Any) -> bool:
+        """Return whether a value looks like an ODU status/capability payload."""
+        if not isinstance(value, dict):
+            return False
+        return any(key in value for key in ("filter", "running", "error", "modelCode", "version"))
 
     @classmethod
     def _find_room_controller_status(cls, value: Any) -> dict[str, Any]:
