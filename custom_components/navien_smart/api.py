@@ -138,6 +138,7 @@ AWS_IOT_SDK_USER_META = "?SDK=Android&Version=2.77.1"
 MQTT_STATUS_TIMEOUT = 5
 TARGET_HUMIDITY_STEP = 5
 OPTIMISTIC_STATE_TTL = 120
+LED_OPTIMISTIC_STATE_TTL = 15
 SUPPORTED_SERVICE_CODE = "300"
 SUPPORTED_MODEL_CODES = {"1900", "1901"}
 SUPPORTED_MODEL_NAMES = {
@@ -709,7 +710,9 @@ class NavienSmartApiClient:
             response_command="status",
             client_id=self._physical_device_id(device),
         )
-        self._optimistic_state.setdefault(device_id, {})["air_monitor_led_brightness"] = int(level)
+        state = self._optimistic_state.setdefault(device_id, {})
+        state["air_monitor_led_brightness"] = int(level)
+        state["air_monitor_led_brightness_updated_at"] = time.time()
 
     async def async_reset_filter(self, device_id: str, filter_type: int = 1) -> None:
         """Reset the Navien ventilation filter usage counter."""
@@ -747,7 +750,14 @@ class NavienSmartApiClient:
         modes = self._extract_modes(raw_device)
         current_state = self._extract_current_state(raw_device, modes)
         optimistic = self._optimistic_state.get(device_seq, {})
-        led_brightness = optimistic.get("air_monitor_led_brightness", led_brightness)
+        optimistic_led = optimistic.get("air_monitor_led_brightness")
+        optimistic_led_updated_at = optimistic.get("air_monitor_led_brightness_updated_at")
+        if (
+            optimistic_led is not None
+            and isinstance(optimistic_led_updated_at, (int, float))
+            and time.time() - optimistic_led_updated_at < LED_OPTIMISTIC_STATE_TTL
+        ):
+            led_brightness = optimistic_led
         target_humidity = current_state.get("target_humidity", optimistic.get("target_humidity"))
         optimistic_target = optimistic.get("target_humidity")
         optimistic_target_updated_at = optimistic.get("target_humidity_updated_at")
@@ -1814,9 +1824,11 @@ class NavienSmartApiClient:
         status = self._extract_mqtt_room_controller_status(payload)
         odu_status = self._extract_mqtt_odu_status(payload)
         air_monitor_status = self._extract_mqtt_air_monitor_status(payload)
-        if status and odu_status:
+        if not status and (odu_status or air_monitor_status):
+            status = {}
+        if odu_status:
             status = {**status, "odu": odu_status}
-        if status and air_monitor_status:
+        if air_monitor_status:
             status = {**status, "airMonitor": air_monitor_status}
         status = self._merge_mqtt_target_humidity(status, payload)
         physical_device_id = (
