@@ -629,10 +629,12 @@ class NavienSmartApiClient:
         mode = self._mode_by_key(device, mode_key)
         if target_humidity is not None and mode.key == "dry":
             target_humidity = self._snap_target_humidity(target_humidity, mode)
-        fan = self._fan_for_mode(mode, fan_key or self._optimistic_state.get(device_id, {}).get("current_fan_key"))
+        state = self._optimistic_state.setdefault(device_id, {})
+        current_mode_key = state.get("current_mode_key") or device.current_mode_key
+        fallback_fan_key = state.get("current_fan_key") if current_mode_key == mode.key else None
+        fan = self._fan_for_mode(mode, fan_key or fallback_fan_key)
         desired = self._build_mode_desired(mode, fan, target_humidity)
         await self._async_send_control(device, "change-mode", desired)
-        state = self._optimistic_state.setdefault(device_id, {})
         state["current_mode_key"] = mode.key
         state["current_fan_key"] = fan.key
         if target_humidity is not None:
