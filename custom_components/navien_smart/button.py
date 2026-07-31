@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -68,6 +70,7 @@ class NavienSmartFilterResetButton(
     async def async_press(self) -> None:
         """Reset the filter counter."""
         await self.coordinator.client.async_reset_filter(self._device_id)
+        await asyncio.sleep(5)
         await self.coordinator.async_request_refresh()
 
     @property

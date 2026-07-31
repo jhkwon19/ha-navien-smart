@@ -208,6 +208,7 @@ class NavienSmartApiClient:
         self._raw_devices: list[dict[str, Any]] = []
         self._logged_unsupported_devices: set[tuple[str, str, str]] = set()
         self._optimistic_state: dict[str, dict[str, Any]] = {}
+        self._last_control_responses: list[dict[str, Any]] = []
         self._stored_target_humidities: dict[str, int] = {
             str(key): self._snap_target_humidity(value, None)
             for key, value in (stored_target_humidities or {}).items()
@@ -383,6 +384,7 @@ class NavienSmartApiClient:
                         "modelCode": odu.get("modelCode"),
                         "version": odu.get("version"),
                         "mountedAPS": odu.get("mountedAPS"),
+                        "filter": self._diagnostic_filter_summary(odu.get("filter")),
                         "additionalData": self._additional_data_summary(odu),
                     },
                     "airMonitor": [
@@ -418,6 +420,7 @@ class NavienSmartApiClient:
                 self._diagnostic_status(status)
                 for status in self._latest_status_by_device_id.values()
             ],
+            "last_control_responses": self._last_control_responses[-10:],
             "latest_air_sensor_keys": [
                 sorted(values)
                 for values in self._latest_air_sensors_by_device_id.values()
@@ -535,10 +538,34 @@ class NavienSmartApiClient:
             "additionalData": cls._additional_data_summary(status),
             "airMonitor_keys": cls._safe_keys(status.get("airMonitor")),
             "airMonitor_additionalData": cls._additional_data_summary(status.get("airMonitor")),
+            "odu_filter": cls._diagnostic_filter_summary(
+                (status.get("odu") or {}).get("filter") if isinstance(status.get("odu"), dict) else None
+            ),
             "airSensorData_keys": cls._safe_keys(status.get("airSensorData")),
             "subRoomController_count": len(cls._list_value(status.get("subRoomController"))),
             "keys": cls._safe_keys(status),
         }
+
+    @classmethod
+    def _diagnostic_filter_summary(cls, value: Any) -> list[dict[str, Any]]:
+        """Return non-sensitive filter fields used to map reset/status behavior."""
+        summary: list[dict[str, Any]] = []
+        for item in cls._list_value(value)[:12]:
+            if not isinstance(item, dict):
+                continue
+            usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
+            summary.append(
+                {
+                    "type": cls._int_value(item.get("type")),
+                    "requestType": cls._int_value(item.get("requestType")),
+                    "percent": cls._filter_percent_from_item(item),
+                    "usage_percent": cls._int_value(usage.get("percent")),
+                    "replacePeriod": cls._int_value(item.get("replacePeriod")),
+                    "keys": cls._safe_keys(item),
+                    "usage_keys": cls._safe_keys(usage),
+                }
+            )
+        return summary
 
     async def async_get_cached_devices(self) -> list[NavienDevice]:
         """Return devices using the latest cached raw devices and MQTT state."""
@@ -718,7 +745,13 @@ class NavienSmartApiClient:
         """Reset the Navien ventilation filter usage counter."""
         device = self._device_for_control(device_id)
         desired = {"odu": {"filter": [{"type": int(filter_type)}]}}
-        await self._async_send_control(device, "filter-reset", desired, response_command="status")
+        response = await self._async_send_control(
+            device,
+            "filter-reset",
+            desired,
+            response_command="status",
+        )
+        self._record_control_response(device, "filter-reset", desired, response)
 
     async def _normalize_device(self, raw_device: dict[str, Any]) -> NavienDevice:
         """Convert a Navien device payload into a stable integration shape."""
@@ -837,12 +870,33 @@ class NavienSmartApiClient:
             result.append(
                 {
                     "type": self._int_value(item.get("type")),
-                    "percent": self._int_value(usage.get("percent")),
+                    "percent": self._filter_percent_from_item(item),
                     "replace_period": self._int_value(item.get("replacePeriod")),
                     "raw": item,
                 }
             )
         return tuple(result)
+
+    @classmethod
+    def _filter_percent_from_item(cls, item: dict[str, Any]) -> int | None:
+        """Extract a filter percentage from known capability/status shapes."""
+        usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
+        for key in (
+            "percent",
+            "useRate",
+            "usageRate",
+            "usagePercent",
+            "usedRate",
+            "remainingRate",
+            "remainRate",
+            "life",
+            "value",
+        ):
+            value = usage.get(key) if key in usage else item.get(key)
+            percent = cls._int_value(value)
+            if percent is not None:
+                return percent
+        return None
 
     def _extract_air_monitor_led_brightness(self, raw_device: dict[str, Any]) -> int | None:
         """Extract air monitor LED brightness when it appears in status payloads."""
@@ -1594,7 +1648,7 @@ class NavienSmartApiClient:
         *,
         response_command: str | None = None,
         client_id: str | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         """Send a V2 room controller command through the Navien control endpoint."""
         if self._user_seq is None or self._home_seq is None:
             await self.async_login()
@@ -1609,7 +1663,7 @@ class NavienSmartApiClient:
         response_topic_command = response_command or command
         response_topic = f"cmd/rc/v2/{model_code}/{physical_device_id}/remote/{response_topic_command}/res"
 
-        await self._request_json(
+        return await self._request_json(
             "POST",
             f"/api/v2.0/devices/{device.id}/control",
             params={"homeSeq": self._home_seq, "userSeq": self._user_seq},
@@ -1624,6 +1678,33 @@ class NavienSmartApiClient:
                 },
             },
         )
+
+    def _record_control_response(
+        self,
+        device: NavienDevice,
+        command: str,
+        desired: dict[str, Any],
+        response: dict[str, Any],
+    ) -> None:
+        """Store a sanitized recent control response for diagnostics."""
+        self._last_control_responses.append(
+            {
+                "command": command,
+                "deviceId": "**REDACTED**",
+                "code": response.get("code"),
+                "msg": response.get("msg"),
+                "message": response.get("message"),
+                "data_keys": self._safe_keys(response.get("data")),
+                "desired_keys": self._safe_keys(desired),
+                "desired_filter": self._diagnostic_filter_summary(
+                    ((desired.get("odu") or {}).get("filter"))
+                    if isinstance(desired.get("odu"), dict)
+                    else None
+                ),
+                "time": int(time.time()),
+            }
+        )
+        self._last_control_responses = self._last_control_responses[-20:]
 
     def _client_id(self) -> str:
         """Return a stable MQTT-style client ID for HTTP control commands."""
