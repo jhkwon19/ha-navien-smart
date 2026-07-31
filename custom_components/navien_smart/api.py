@@ -1316,6 +1316,9 @@ class NavienSmartApiClient:
             for fan in mode.fan_options:
                 if fan.key == fan_key:
                     return fan
+        for fan in mode.fan_options:
+            if fan.option == mode.option and fan.air_volume == mode.air_volume:
+                return fan
         return mode.fan_options[0]
 
     @staticmethod

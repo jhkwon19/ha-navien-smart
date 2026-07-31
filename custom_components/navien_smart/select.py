@@ -9,7 +9,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import NavienDevice, NavienMode
+from .api import NavienDevice, NavienFanOption, NavienMode
 from .const import DOMAIN
 from .coordinator import NavienSmartDataUpdateCoordinator
 
@@ -137,12 +137,11 @@ class NavienSmartFanSelect(NavienSmartSelectBase):
         if mode is None or device is None:
             return None
         fan_key = device.current_fan_key
-        if fan_key is None and mode.fan_options:
-            return mode.fan_options[0].name
         for fan in mode.fan_options:
             if fan.key == fan_key:
                 return fan.name
-        return None
+        default_fan = _default_fan_for_mode(mode)
+        return default_fan.name if default_fan else None
 
     async def async_select_option(self, option: str) -> None:
         """Select a fan option."""
@@ -173,3 +172,11 @@ def _mode_by_key(device: NavienDevice, key: str) -> NavienMode | None:
 def _mode_by_name(device: NavienDevice, name: str) -> NavienMode | None:
     """Find a mode by display name."""
     return next((mode for mode in device.modes if mode.name == name), None)
+
+
+def _default_fan_for_mode(mode: NavienMode) -> NavienFanOption | None:
+    """Return the mode's configured default fan option."""
+    for fan in mode.fan_options:
+        if fan.option == mode.option and fan.air_volume == mode.air_volume:
+            return fan
+    return mode.fan_options[0] if mode.fan_options else None
