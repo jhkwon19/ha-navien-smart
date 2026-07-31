@@ -83,7 +83,7 @@ class NavienSmartModeSelect(NavienSmartSelectBase):
         coordinator: NavienSmartDataUpdateCoordinator,
         device: NavienDevice,
     ) -> None:
-        super().__init__(coordinator, device, "operation_mode", "Operation Mode")
+        super().__init__(coordinator, device, "operation_mode", "운전모드")
 
     @property
     def options(self) -> list[str]:
@@ -119,7 +119,7 @@ class NavienSmartFanSelect(NavienSmartSelectBase):
         coordinator: NavienSmartDataUpdateCoordinator,
         device: NavienDevice,
     ) -> None:
-        super().__init__(coordinator, device, "fan", "Fan")
+        super().__init__(coordinator, device, "fan", "풍량")
 
     @property
     def options(self) -> list[str]:

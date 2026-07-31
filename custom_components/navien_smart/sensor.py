@@ -36,26 +36,26 @@ class NavienSmartSensorDescription:
 AIR_SENSOR_DESCRIPTIONS: tuple[NavienSmartSensorDescription, ...] = (
     NavienSmartSensorDescription(
         key="temperature",
-        name="Temperature",
+        name="온도",
         native_unit=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
     ),
     NavienSmartSensorDescription(
         key="humidity",
-        name="Humidity",
+        name="습도",
         native_unit=PERCENTAGE,
         device_class=SensorDeviceClass.HUMIDITY,
     ),
-    NavienSmartSensorDescription(key="pm1Dot0", name="PM1.0", native_unit="µg/m³"),
-    NavienSmartSensorDescription(key="pm2Dot5", name="PM2.5", native_unit="µg/m³"),
-    NavienSmartSensorDescription(key="pm10", name="PM10", native_unit="µg/m³"),
-    NavienSmartSensorDescription(key="co2", name="CO2", native_unit="ppm"),
-    NavienSmartSensorDescription(key="tvoc", name="TVOC", native_unit="µg/m³"),
-    NavienSmartSensorDescription(key="total", name="Air Quality Score"),
-    NavienSmartSensorDescription(key="radon", name="Radon", native_unit="Bq/m³"),
+    NavienSmartSensorDescription(key="pm1Dot0", name="극초미세먼지", native_unit="µg/m³"),
+    NavienSmartSensorDescription(key="pm2Dot5", name="초미세먼지", native_unit="µg/m³"),
+    NavienSmartSensorDescription(key="pm10", name="미세먼지", native_unit="µg/m³"),
+    NavienSmartSensorDescription(key="co2", name="이산화탄소", native_unit="ppm"),
+    NavienSmartSensorDescription(key="tvoc", name="휘발성 유기화합물", native_unit="µg/m³"),
+    NavienSmartSensorDescription(key="total", name="공기질점수"),
+    NavienSmartSensorDescription(key="radon", name="라돈", native_unit="Bq/m³"),
 )
 
-AIR_MONITOR_NAME = "Navien Air Monitor"
+AIR_MONITOR_NAME = "에어모니터"
 AIR_MONITOR_MODEL = "NAA-21DM"
 
 

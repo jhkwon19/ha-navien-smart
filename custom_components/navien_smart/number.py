@@ -35,7 +35,7 @@ class NavienSmartTargetHumidityNumber(
 ):
     """Target humidity selector for dehumidification mode."""
 
-    _attr_name = "Target Humidity"
+    _attr_name = "목표습도"
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_native_step = 5
     _attr_mode = NumberMode.SLIDER

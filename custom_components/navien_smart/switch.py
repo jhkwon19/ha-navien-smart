@@ -42,7 +42,7 @@ class NavienSmartPowerSwitch(
         super().__init__(coordinator)
         self._device_id = device.id
         self._attr_unique_id = f"{device.id}_power"
-        self._attr_name = "Power"
+        self._attr_name = "전원"
 
     @property
     def device(self) -> NavienDevice | None:
