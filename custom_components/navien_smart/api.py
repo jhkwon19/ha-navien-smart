@@ -136,6 +136,7 @@ AWS_IOT_REGION = "ap-northeast-2"
 AWS_IOT_SERVICE = "iotdata"
 AWS_IOT_SDK_USER_META = "?SDK=Android&Version=2.77.1"
 MQTT_STATUS_TIMEOUT = 5
+AIR_SENSOR_HTTP_CACHE_TTL = 600
 TARGET_HUMIDITY_STEP = 5
 OPTIMISTIC_STATE_TTL = 120
 LED_OPTIMISTIC_STATE_TTL = 15
@@ -203,6 +204,8 @@ class NavienSmartApiClient:
         self._mqtt_topic_device_ids: dict[str, str] = {}
         self._latest_status_by_device_id: dict[str, dict[str, Any]] = {}
         self._latest_air_sensors_by_device_id: dict[str, dict[str, dict[str, Any]]] = {}
+        self._latest_http_air_sensors_by_device_seq: dict[str, dict[str, dict[str, Any]]] = {}
+        self._latest_http_air_sensors_updated_by_device_seq: dict[str, float] = {}
         self._devices: dict[str, NavienDevice] = {}
         self._all_raw_devices: list[dict[str, Any]] = []
         self._raw_devices: list[dict[str, Any]] = []
@@ -569,7 +572,10 @@ class NavienSmartApiClient:
 
     async def async_get_cached_devices(self) -> list[NavienDevice]:
         """Return devices using the latest cached raw devices and MQTT state."""
-        normalized = [await self._normalize_device(device) for device in self._raw_devices]
+        normalized = [
+            await self._normalize_device(device, fetch_http_air_sensors=False)
+            for device in self._raw_devices
+        ]
         self._devices = {device.id: device for device in normalized}
         return normalized
 
@@ -753,7 +759,12 @@ class NavienSmartApiClient:
         )
         self._record_control_response(device, "filter-reset", desired, response)
 
-    async def _normalize_device(self, raw_device: dict[str, Any]) -> NavienDevice:
+    async def _normalize_device(
+        self,
+        raw_device: dict[str, Any],
+        *,
+        fetch_http_air_sensors: bool = True,
+    ) -> NavienDevice:
         """Convert a Navien device payload into a stable integration shape."""
         properties = raw_device.get("Properties") or {}
         device_seq = str(raw_device.get("deviceSeq") or raw_device.get("deviceId"))
@@ -773,7 +784,11 @@ class NavienSmartApiClient:
             else str(model_name or model_code or "")
         )
         device_type = "air_sensor" if str(service_code) == "300" else "unknown"
-        air_sensors = await self._get_air_sensors(device_seq) if device_type == "air_sensor" else {}
+        air_sensors = (
+            await self._get_air_sensors_cached(device_seq)
+            if device_type == "air_sensor" and fetch_http_air_sensors
+            else self._latest_http_air_sensors_by_device_seq.get(device_seq, {})
+        )
         mqtt_air_sensors = self._latest_air_sensors_by_device_id.get(str(raw_device.get("deviceId"))) or {}
         if mqtt_air_sensors:
             air_sensors = {**air_sensors, **mqtt_air_sensors}
@@ -2487,7 +2502,21 @@ class NavienSmartApiClient:
                         "air_monitor_model_code": air_monitor.get("modelCode"),
                         "source": "http",
                     }
+        self._latest_http_air_sensors_by_device_seq[device_seq] = values
+        self._latest_http_air_sensors_updated_by_device_seq[device_seq] = time.time()
         return values
+
+    async def _get_air_sensors_cached(self, device_seq: str) -> dict[str, dict[str, Any]]:
+        """Return cached air monitor values unless the HTTP cache is stale."""
+        cached = self._latest_http_air_sensors_by_device_seq.get(device_seq)
+        updated_at = self._latest_http_air_sensors_updated_by_device_seq.get(device_seq)
+        if (
+            cached is not None
+            and isinstance(updated_at, (int, float))
+            and time.time() - updated_at < AIR_SENSOR_HTTP_CACHE_TTL
+        ):
+            return cached
+        return await self._get_air_sensors(device_seq)
 
     async def _request_json(
         self,
